@@ -9,9 +9,14 @@ CREATE TABLE IF NOT EXISTS users (
   first_name VARCHAR(100),
   last_name VARCHAR(100),
   preferences JSONB,  -- Budget, cities, features preferences
+  password_reset_token VARCHAR(255),
+  password_reset_expires TIMESTAMP,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_token VARCHAR(255);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_expires TIMESTAMP;
 
 -- Properties table (real listings)
 CREATE TABLE IF NOT EXISTS properties (

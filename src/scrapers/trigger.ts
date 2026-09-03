@@ -7,7 +7,7 @@ import axios from 'axios';
  * When a user submits their preferences:
  * 1. Extract criteria (city, budget, bedrooms, etc)
  * 2. Match against real estate agents' "coming soon" listings (agent_listings table)
- * 3. Search Instagram hashtags via the official Graph API (if configured)
+ * 3. (Paused) Search Instagram via the official Graph API — see ENABLE_INSTAGRAM_SCRAPING below
  * 4. Store results with source tracking
  * 5. Notify user of new matches
  *
@@ -15,7 +15,14 @@ import axios from 'axios';
  * scraping it would violate Meta's Terms of Service, so it is intentionally
  * not implemented here. The Agent Portal (agents.ts) is the legitimate
  * substitute — agents opt in to submit their own "coming soon" listings.
+ *
+ * Instagram Business Discovery requires Meta Advanced Access (App Review +
+ * Tech Provider business/access verification) to look up accounts outside
+ * our own Business Manager, which we're not pursuing right now. Bulk real
+ * listing data instead comes from the Boligsiden scraper (see
+ * src/scrapers/boligsiden.ts), which needs no such approval.
  */
+const ENABLE_INSTAGRAM_SCRAPING = false; // paused — flip back on once Instagram Advanced Access (or an opt-in flow) is in place
 
 export interface UserPreferences {
   city: string;
@@ -34,10 +41,13 @@ export async function triggerSocialMediaScraping(userId: string, preferences: Us
     console.log(`   Budget: ${preferences.budget?.min}-${preferences.budget?.max}`);
 
     // Run asynchronously (don't block user experience)
-    Promise.all([
-      matchAgentComingSoonListings(userId, preferences),
-      scrapeInstagram(userId, preferences),
-    ]).catch(error => {
+    const tasks = [matchAgentComingSoonListings(userId, preferences)];
+    if (ENABLE_INSTAGRAM_SCRAPING) {
+      tasks.push(scrapeInstagram(userId, preferences));
+    } else {
+      console.log('📷 Instagram search paused (ENABLE_INSTAGRAM_SCRAPING = false)');
+    }
+    Promise.all(tasks).catch(error => {
       console.error('Error during background matching:', error);
     });
 

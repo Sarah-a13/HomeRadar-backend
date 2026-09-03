@@ -10,6 +10,7 @@
     "setup": "ts-node src/setup.ts",
     "db:setup": "psql -f src/db/schema.sql",
     "scrape:boiq": "ts-node src/scrapers/boiq.ts",
+    "scrape:boligsiden": "node --use-system-ca -r ts-node/register src/scrapers/boligsiden.ts",
     "seed": "ts-node src/db/seed.ts"
   },
   "dependencies": {
