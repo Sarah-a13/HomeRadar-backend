@@ -87,7 +87,9 @@ function parseListingsFromHtml(html: string): ScrapedListing[] {
     const priceCash = extractField(chunk, /"priceCash":(\d+)/);
     const yearBuilt = extractField(chunk, /"yearBuilt":(\d+)/);
     const daysListed = extractField(chunk, /"daysListed":\{"days":(\d+)\}/);
-    const imageUrl = extractField(chunk, /"image":\{"imageSources":\[\{[^}]*?"url":"([^"]+)"/);
+    // Non-greedy [\s\S] (not [^}]) because "imageSources" contains a nested "size":{...} object
+    // whose closing brace would otherwise stop the match before reaching "url".
+    const imageUrl = extractField(chunk, /"image":\{"imageSources":\[\{[\s\S]*?"url":"([^"]+)"/);
     const realtorName = chunk.match(/"realtor":\{[\s\S]*?"name":"([^"]+)"/)?.[1];
 
     // Skip "coming soon" preview blocks and anything missing required fields
