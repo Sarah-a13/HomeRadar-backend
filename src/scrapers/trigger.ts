@@ -2,14 +2,19 @@ import { pool } from '../server';
 import axios from 'axios';
 
 /**
- * Trigger-Based Social Media Scraper
- * 
+ * Trigger-Based Property Matching
+ *
  * When a user submits their preferences:
  * 1. Extract criteria (city, budget, bedrooms, etc)
- * 2. Trigger Facebook Marketplace scraping for that area
- * 3. Search Instagram hashtags for matching properties
+ * 2. Match against real estate agents' "coming soon" listings (agent_listings table)
+ * 3. Search Instagram hashtags via the official Graph API (if configured)
  * 4. Store results with source tracking
  * 5. Notify user of new matches
+ *
+ * Note: Facebook Marketplace has no public API for reading listings, and
+ * scraping it would violate Meta's Terms of Service, so it is intentionally
+ * not implemented here. The Agent Portal (agents.ts) is the legitimate
+ * substitute — agents opt in to submit their own "coming soon" listings.
  */
 
 export interface UserPreferences {
@@ -24,106 +29,115 @@ export interface UserPreferences {
  */
 export async function triggerSocialMediaScraping(userId: string, preferences: UserPreferences) {
   try {
-    console.log(`🔍 Starting social media scrape for user ${userId}`);
+    console.log(`🔍 Starting property match for user ${userId}`);
     console.log(`   City: ${preferences.city}`);
     console.log(`   Budget: ${preferences.budget?.min}-${preferences.budget?.max}`);
 
-    // Start scraping asynchronously (don't block user experience)
+    // Run asynchronously (don't block user experience)
     Promise.all([
-      scrapeFacebookMarketplace(userId, preferences),
+      matchAgentComingSoonListings(userId, preferences),
       scrapeInstagram(userId, preferences),
     ]).catch(error => {
-      console.error('Error during background scraping:', error);
+      console.error('Error during background matching:', error);
     });
 
-    console.log('✅ Scraping queued (running in background)');
+    console.log('✅ Matching queued (running in background)');
   } catch (error) {
-    console.error('Error triggering scraper:', error);
+    console.error('Error triggering matcher:', error);
   }
 }
 
 /**
- * Facebook Marketplace Scraper
- * Searches for properties matching user criteria
+ * Agent "Coming Soon" Listings Matcher
+ * Copies agent pre-listings matching user criteria into the public properties feed
  */
-async function scrapeFacebookMarketplace(userId: string, prefs: UserPreferences) {
+async function matchAgentComingSoonListings(userId: string, prefs: UserPreferences) {
   try {
-    console.log(`📱 Scraping Facebook Marketplace for ${prefs.city}...`);
+    console.log(`🏘️  Matching agent coming-soon listings for ${prefs.city}...`);
 
-    // Build search query
-    const searchQuery = buildSearchQuery(prefs);
+    const params: any[] = [`%${prefs.city}%`];
+    let query = `SELECT al.*, a.name as agent_full_name, a.email as agent_full_email
+                 FROM agent_listings al
+                 JOIN agents a ON al.agent_id = a.id
+                 WHERE al.status = 'coming_soon' AND al.city ILIKE $1`;
 
-    // Simulate API call to Facebook Marketplace
-    // In production: Use Playwright for headless browsing
-    const facebookListings = await simulateFacebookSearch(prefs.city, searchQuery);
+    if (prefs.budget?.max) {
+      params.push(prefs.budget.max);
+      query += ` AND (al.price_estimate IS NULL OR al.price_estimate <= $${params.length})`;
+    }
+    if (prefs.bedrooms) {
+      params.push(prefs.bedrooms);
+      query += ` AND (al.bedrooms IS NULL OR al.bedrooms >= $${params.length})`;
+    }
 
-    console.log(`Found ${facebookListings.length} listings on Facebook Marketplace`);
+    const matches = await pool.query(query, params);
+    console.log(`Found ${matches.rows.length} agent coming-soon listings`);
 
-    // Insert into database
-    for (const listing of facebookListings) {
+    let storedCount = 0;
+    for (const listing of matches.rows) {
       try {
-        // Check for duplicates
-        const existing = await pool.query(
-          'SELECT id FROM properties WHERE source_url = $1',
-          [listing.source_url]
-        );
+        const sourceUrl = `agent_listing:${listing.id}`;
+        const existing = await pool.query('SELECT id FROM properties WHERE source_url = $1', [sourceUrl]);
+        if (existing.rows.length > 0) continue;
 
-        if (existing.rows.length > 0) {
-          continue; // Skip duplicate
-        }
-
-        // Insert new listing
         await pool.query(
           `INSERT INTO properties (
             address, city, price, bedrooms, bathrooms, sqm,
             source, source_url, verified, description, images,
-            created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)`,
+            agent_name, agent_email, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP)`,
           [
             listing.address,
-            prefs.city,
-            listing.price,
+            listing.city,
+            listing.price_estimate,
             listing.bedrooms,
             listing.bathrooms,
             listing.sqm,
-            'facebook', // source
-            listing.source_url,
-            false, // not verified (user-generated)
+            'agent_portal',
+            sourceUrl,
+            true, // verified - agent-submitted, tied to a registered account
             listing.description,
             listing.images,
+            listing.agent_full_name,
+            listing.agent_full_email,
           ]
         );
-
+        storedCount++;
         console.log(`✅ Stored: ${listing.address}`);
       } catch (error) {
         console.error(`Failed to store: ${listing.address}`, error);
       }
     }
 
-    // Notify user of new listings
-    if (facebookListings.length > 0) {
-      await notifyUser(userId, `Found ${facebookListings.length} properties on Facebook Marketplace in ${prefs.city}`);
+    if (storedCount > 0) {
+      await notifyUser(userId, `Found ${storedCount} coming-soon properties from local agents in ${prefs.city}`);
     }
   } catch (error) {
-    console.error('Facebook scraper error:', error);
+    console.error('Agent listing matcher error:', error);
   }
 }
 
 /**
- * Instagram Scraper
- * Searches for properties using real estate hashtags
+ * Instagram Scraper (official Graph API)
+ * Searches for properties using real estate hashtags via Instagram's
+ * Hashtag Search API. Requires INSTAGRAM_ACCESS_TOKEN and
+ * INSTAGRAM_BUSINESS_ACCOUNT_ID to be set (see .env.example). If not
+ * configured, this is skipped rather than faking results.
  */
 async function scrapeInstagram(userId: string, prefs: UserPreferences) {
+  const accessToken = process.env.INSTAGRAM_ACCESS_TOKEN;
+  const businessAccountId = process.env.INSTAGRAM_BUSINESS_ACCOUNT_ID;
+
+  if (!accessToken || !businessAccountId) {
+    console.log('📷 Instagram search skipped - INSTAGRAM_ACCESS_TOKEN / INSTAGRAM_BUSINESS_ACCOUNT_ID not configured');
+    return;
+  }
+
   try {
-    console.log(`📷 Scraping Instagram for ${prefs.city}...`);
+    console.log(`📷 Searching Instagram for ${prefs.city}...`);
 
-    // Search hashtags relevant to the city and property type
     const hashtags = buildInstagramHashtags(prefs);
-    console.log(`Searching hashtags: ${hashtags.join(', ')}`);
-
-    // Simulate API call to Instagram
-    // In production: Use Instagram Graph API with business account
-    const instagramListings = await simulateInstagramSearch(hashtags, prefs.city);
+    const instagramListings = await searchInstagramHashtags(hashtags, businessAccountId, accessToken);
 
     console.log(`Found ${instagramListings.length} posts on Instagram`);
 
@@ -141,27 +155,21 @@ async function scrapeInstagram(userId: string, prefs: UserPreferences) {
 
         await pool.query(
           `INSERT INTO properties (
-            address, city, price, bedrooms, sqm,
-            source, source_url, verified, description, images,
-            agent_name, agent_email, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)`,
+            address, city, source, source_url, verified, description, images,
+            created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)`,
           [
-            post.address,
+            prefs.city, // exact address unknown from a caption alone
             prefs.city,
-            post.price,
-            post.bedrooms,
-            post.sqm,
-            'instagram', // source
+            'instagram',
             post.source_url,
             false, // not verified
             post.description,
             post.images,
-            post.agent_name,
-            post.agent_email,
           ]
         );
 
-        console.log(`✅ Stored: Instagram post from ${post.agent_name}`);
+        console.log(`✅ Stored Instagram post: ${post.source_url}`);
       } catch (error) {
         console.error('Failed to store Instagram post:', error);
       }
@@ -174,19 +182,6 @@ async function scrapeInstagram(userId: string, prefs: UserPreferences) {
   } catch (error) {
     console.error('Instagram scraper error:', error);
   }
-}
-
-/**
- * Helper: Build search query from preferences
- */
-function buildSearchQuery(prefs: UserPreferences): string {
-  const parts = [prefs.city];
-
-  if (prefs.bedrooms) parts.push(`${prefs.bedrooms} bedroom`);
-  if (prefs.budget?.max) parts.push(`under ${prefs.budget.max / 1000000}M`);
-  if (prefs.features?.length) parts.push(prefs.features.join(' '));
-
-  return parts.join(' ');
 }
 
 /**
@@ -208,53 +203,52 @@ function buildInstagramHashtags(prefs: UserPreferences): string[] {
 }
 
 /**
- * SIMULATION: Facebook Marketplace search
- * In production, replace with Playwright scraper
+ * Real Instagram Hashtag Search via the official Graph API.
+ * Docs: https://developers.facebook.com/docs/instagram-api/guides/hashtag-search
+ * Requires the business account to have been granted the
+ * instagram_basic + instagram_manage_insights permissions.
  */
-async function simulateFacebookSearch(
-  city: string,
-  query: string
-): Promise<Array<any>> {
-  // This is a placeholder - would be replaced with real Playwright scraper
-  console.log(`Would search Facebook: "${query}"`);
+async function searchInstagramHashtags(
+  hashtags: string[],
+  businessAccountId: string,
+  accessToken: string
+): Promise<Array<{ source_url: string; description: string; images: string[] }>> {
+  const results: Array<{ source_url: string; description: string; images: string[] }> = [];
+  const graphUrl = 'https://graph.facebook.com/v19.0';
 
-  // Return mock results for MVP
-  return [
-    {
-      address: `Sample Property 1, ${city}`,
-      price: 4000000,
-      bedrooms: 3,
-      bathrooms: 2,
-      sqm: 120,
-      source_url: 'https://facebook.com/marketplace/...',
-      description: 'Beautiful apartment listing',
-      images: [],
-    },
-  ];
-}
+  for (const tag of hashtags) {
+    try {
+      const tagName = tag.replace('#', '');
 
-/**
- * SIMULATION: Instagram hashtag search
- * In production, use Instagram Graph API
- */
-async function simulateInstagramSearch(hashtags: string[], city: string): Promise<Array<any>> {
-  // This is a placeholder - would be replaced with real Instagram API
-  console.log(`Would search Instagram: ${hashtags.join(' ')}`);
+      // Step 1: Resolve hashtag name to an ID
+      const hashtagRes = await axios.get(`${graphUrl}/ig_hashtag_search`, {
+        params: { user_id: businessAccountId, q: tagName, access_token: accessToken },
+      });
+      const hashtagId = hashtagRes.data?.data?.[0]?.id;
+      if (!hashtagId) continue;
 
-  // Return mock results for MVP
-  return [
-    {
-      address: `Instagram Property, ${city}`,
-      price: 3500000,
-      bedrooms: 2,
-      sqm: 100,
-      source_url: 'https://instagram.com/p/...',
-      description: 'Real estate agent posting',
-      images: ['https://instagram.com/...'],
-      agent_name: 'Maria Realtor',
-      agent_email: 'maria@realtor.dk',
-    },
-  ];
+      // Step 2: Fetch recent media for that hashtag
+      const mediaRes = await axios.get(`${graphUrl}/${hashtagId}/recent_media`, {
+        params: {
+          user_id: businessAccountId,
+          fields: 'id,caption,permalink,media_url',
+          access_token: accessToken,
+        },
+      });
+
+      for (const post of mediaRes.data?.data ?? []) {
+        results.push({
+          source_url: post.permalink,
+          description: post.caption ?? '',
+          images: post.media_url ? [post.media_url] : [],
+        });
+      }
+    } catch (error: any) {
+      console.warn(`Instagram hashtag search failed for ${tag}:`, error.response?.data?.error?.message ?? error.message);
+    }
+  }
+
+  return results;
 }
 
 /**

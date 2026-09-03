@@ -124,9 +124,19 @@ CREATE TABLE IF NOT EXISTS agent_listings (
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Notifications (in-app alerts for users)
+CREATE TABLE IF NOT EXISTS notifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  message TEXT NOT NULL,
+  read BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Create indexes
-CREATE INDEX idx_users_email ON users(email);
-CREATE INDEX idx_saved_user ON saved_properties(user_id);
-CREATE INDEX idx_saved_property ON saved_properties(property_id);
-CREATE INDEX idx_agents_email ON agents(email);
-CREATE INDEX idx_agent_listings ON agent_listings(agent_id);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_saved_user ON saved_properties(user_id);
+CREATE INDEX IF NOT EXISTS idx_saved_property ON saved_properties(property_id);
+CREATE INDEX IF NOT EXISTS idx_agents_email ON agents(email);
+CREATE INDEX IF NOT EXISTS idx_agent_listings ON agent_listings(agent_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
