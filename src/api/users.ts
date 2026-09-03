@@ -5,13 +5,14 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { triggerSocialMediaScraping } from '../scrapers/trigger';
 import { getAuthUser } from '../middleware/auth';
+import { authRateLimiter } from '../middleware/rateLimit';
 
 const router = express.Router();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-key-change-in-production';
 
 // POST register new user
-router.post('/register', async (req: Request, res: Response) => {
+router.post('/register', authRateLimiter, async (req: Request, res: Response) => {
   try {
     const { email, password, first_name, last_name } = req.body;
 
@@ -67,7 +68,7 @@ router.post('/register', async (req: Request, res: Response) => {
 });
 
 // POST login
-router.post('/login', async (req: Request, res: Response) => {
+router.post('/login', authRateLimiter, async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
 
@@ -230,7 +231,7 @@ router.put('/preferences', async (req: Request, res: Response) => {
 // NOTE: no email service is configured for this project, so the reset link is returned directly
 // in the response for the frontend to display (clearly marked as demo-only). In production this
 // token must be emailed to the user instead of being exposed via the API response.
-router.post('/forgot-password', async (req: Request, res: Response) => {
+router.post('/forgot-password', authRateLimiter, async (req: Request, res: Response) => {
   try {
     const { email } = req.body;
     if (!email) {
@@ -238,8 +239,13 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
     }
 
     const result = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+
+    // Always respond the same way whether or not the account exists, to avoid
+    // leaking which emails are registered (account enumeration).
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'No account found with that email' });
+      return res.json({
+        message: 'If an account exists with that email, a password reset has been generated.',
+      });
     }
 
     const rawToken = crypto.randomBytes(32).toString('hex');
@@ -252,7 +258,7 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
     );
 
     res.json({
-      message: 'Demo mode: no email service is configured, so your reset token is returned here directly.',
+      message: 'If an account exists with that email, a password reset has been generated. Demo mode: no email service is configured, so your reset token is returned here directly.',
       resetToken: rawToken,
       expiresAt: expires,
     });
@@ -266,7 +272,7 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
 });
 
 // POST reset password using the token issued by /forgot-password
-router.post('/reset-password', async (req: Request, res: Response) => {
+router.post('/reset-password', authRateLimiter, async (req: Request, res: Response) => {
   try {
     const { token, newPassword } = req.body;
     if (!token || !newPassword) {

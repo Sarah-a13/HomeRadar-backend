@@ -86,14 +86,21 @@ async function matchAgentComingSoonListings(userId: string, prefs: UserPreferenc
     let storedCount = 0;
     for (const listing of matches.rows) {
       try {
-        const sourceUrl = `agent_listing:${listing.id}`;
-        const existing = await pool.query('SELECT id FROM properties WHERE source_url = $1', [sourceUrl]);
+        // Coming-soon agent listings have no public URL yet, so source_url is left NULL
+        // (frontend already renders a plain "View Details" button when source_url is falsy)
+        // instead of the fake, non-clickable "agent_listing:{id}" placeholder used previously.
+        // Dedupe on the agent_listings row id via source_id instead of an ad-hoc source_url key.
+        const sourceId = `agent_listing_${listing.id}`;
+        const existing = await pool.query(
+          'SELECT id FROM properties WHERE source = $1 AND source_id = $2',
+          ['agent_portal', sourceId]
+        );
         if (existing.rows.length > 0) continue;
 
         await pool.query(
           `INSERT INTO properties (
             address, city, price, bedrooms, bathrooms, sqm,
-            source, source_url, verified, description, images,
+            source, source_id, verified, description, images,
             agent_name, agent_email, created_at
           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP)`,
           [
@@ -104,7 +111,7 @@ async function matchAgentComingSoonListings(userId: string, prefs: UserPreferenc
             listing.bathrooms,
             listing.sqm,
             'agent_portal',
-            sourceUrl,
+            sourceId,
             true, // verified - agent-submitted, tied to a registered account
             listing.description,
             listing.images,
