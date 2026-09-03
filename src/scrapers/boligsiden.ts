@@ -300,6 +300,55 @@ export async function scrapeBoligsidenForCriteria(
   return { inserted, matched };
 }
 
+/**
+ * Fetches a boligsiden listing's own detail page (robots.txt allows /adresse/*, unlike the
+ * disallowed /tilsalg/id/* pattern) for fields the search-results page doesn't carry: a real
+ * description, bathroom count, energy label, monthly expense, lot size, and - importantly -
+ * the listing agent's actual phone/email, so users can contact them without leaving HomeRadar.
+ * Called lazily (once per listing, the first time a user opens its details) rather than during
+ * bulk scraping, to avoid one extra request per listing on every crawl.
+ */
+export async function enrichPropertyDetails(propertyId: string, sourceUrl: string): Promise<void> {
+  const response = await axios.get(sourceUrl, {
+    headers: { 'User-Agent': USER_AGENT, 'Accept-Language': 'da-DK,da;q=0.9' },
+    timeout: 20000,
+  });
+  const decoded = decodeEscapes(response.data);
+
+  const description = decoded.match(/<meta name="description" content="([^"]+)"/)?.[1]
+    ?.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'") ?? null;
+  const bathrooms = extractField(decoded, /"numberOfBathrooms":(\d+)/);
+  const energyLabel = extractField(decoded, /"energyLabel":"([^"]+)"/);
+  const monthlyExpense = extractField(decoded, /"monthlyExpense":(\d+)/);
+  const lotArea = extractField(decoded, /"lotArea":(\d+)/);
+  // contactInformation has no nested objects, so a plain [^}]* is safe here (unlike imageSources above).
+  const contactBlock = decoded.match(/"contactInformation":\{([^}]*)\}/)?.[1];
+  const agentEmail = contactBlock?.match(/"email":"([^"]+)"/)?.[1] ?? null;
+  const agentPhone = contactBlock?.match(/"phone":"([^"]+)"/)?.[1] ?? null;
+
+  await pool.query(
+    `UPDATE properties SET
+      description = COALESCE(description, $1),
+      bathrooms = COALESCE(bathrooms, $2),
+      energy_label = $3,
+      monthly_expense = $4,
+      lot_area = $5,
+      agent_email = COALESCE(agent_email, $6),
+      agent_phone = COALESCE(agent_phone, $7)
+    WHERE id = $8`,
+    [
+      description,
+      bathrooms ? parseFloat(bathrooms) : null,
+      energyLabel?.toUpperCase() ?? null,
+      monthlyExpense ? parseInt(monthlyExpense, 10) : null,
+      lotArea ? parseInt(lotArea, 10) : null,
+      agentEmail,
+      agentPhone,
+      propertyId,
+    ]
+  );
+}
+
 // Only run the full multi-page crawl when this file is executed directly (npm run scrape:boligsiden),
 // not when imported by trigger.ts for the on-demand targeted search above.
 if (require.main === module) {

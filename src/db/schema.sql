@@ -63,6 +63,13 @@ CREATE TABLE IF NOT EXISTS properties (
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Extra detail-page fields (lazily backfilled the first time a user opens a listing's details -
+-- see enrichPropertyDetails in src/scrapers/boligsiden.ts) so users don't need to leave HomeRadar
+-- to see energy rating, monthly expense, or lot size.
+ALTER TABLE properties ADD COLUMN IF NOT EXISTS energy_label VARCHAR(5);
+ALTER TABLE properties ADD COLUMN IF NOT EXISTS monthly_expense INT;
+ALTER TABLE properties ADD COLUMN IF NOT EXISTS lot_area INT;
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_address ON properties (address);
 CREATE INDEX IF NOT EXISTS idx_city ON properties (city);

@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import { pool } from '../server';
 import { getAuthUser } from '../middleware/auth';
+import { enrichPropertyDetails } from '../scrapers/boligsiden';
 
 const router = express.Router();
 
@@ -11,7 +12,7 @@ const WRITABLE_PROPERTY_FIELDS = new Set([
   'price', 'bedrooms', 'bathrooms', 'sqm', 'year_built', 'property_type',
   'source', 'source_url', 'source_id', 'verified', 'images', 'thumbnail_url',
   'description', 'agent_name', 'agent_phone', 'agent_email',
-  'listing_date', 'sold_date',
+  'listing_date', 'sold_date', 'energy_label', 'monthly_expense', 'lot_area',
 ]);
 
 // Mock properties for fallback when database unavailable
@@ -198,11 +199,13 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
-// GET single property by ID
+// GET single property by ID - lazily enriches Boligsiden listings with full detail-page
+// info (description, bathrooms, energy label, monthly expense, lot size, agent contact)
+// the first time they're viewed, so users get everything without leaving HomeRadar.
 router.get('/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const result = await pool.query('SELECT * FROM properties WHERE id = $1', [id]);
+    let result = await pool.query('SELECT * FROM properties WHERE id = $1', [id]);
 
     if (result.rows.length === 0) {
       // Try mock data
@@ -213,7 +216,18 @@ router.get('/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Property not found' });
     }
 
-    res.json(result.rows[0]);
+    let property = result.rows[0];
+    if (property.source === 'boligsiden' && property.description === null && property.source_url) {
+      try {
+        await enrichPropertyDetails(property.id, property.source_url);
+        result = await pool.query('SELECT * FROM properties WHERE id = $1', [id]);
+        property = result.rows[0];
+      } catch (error: any) {
+        console.error(`Failed to enrich property ${id}:`, error.message);
+      }
+    }
+
+    res.json(property);
   } catch (error) {
     console.warn(`⚠️  Database unavailable, trying mock data for property ${req.params.id}`);
     
