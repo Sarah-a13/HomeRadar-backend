@@ -118,10 +118,13 @@ async function matchAgentComingSoonListings(userId: string, prefs: UserPreferenc
 }
 
 /**
- * Instagram Scraper (official Graph API)
- * Searches for properties using real estate hashtags via Instagram's
- * Hashtag Search API. Requires INSTAGRAM_ACCESS_TOKEN and
- * INSTAGRAM_BUSINESS_ACCOUNT_ID to be set (see .env.example). If not
+ * Instagram Scraper (official Graph API - Business Discovery)
+ * Looks up recent public posts from real estate agents who registered
+ * their Instagram handle via the Agent Portal, using the Business
+ * Discovery endpoint (works against known Business/Creator accounts,
+ * unlike hashtag search which requires "Instagram Public Content Access"
+ * review for arbitrary public content). Requires INSTAGRAM_ACCESS_TOKEN
+ * and INSTAGRAM_BUSINESS_ACCOUNT_ID to be set (see .env.example). If not
  * configured, this is skipped rather than faking results.
  */
 async function scrapeInstagram(userId: string, prefs: UserPreferences) {
@@ -134,10 +137,13 @@ async function scrapeInstagram(userId: string, prefs: UserPreferences) {
   }
 
   try {
-    console.log(`📷 Searching Instagram for ${prefs.city}...`);
+    console.log(`📷 Searching Instagram (Business Discovery) for ${prefs.city}...`);
 
-    const hashtags = buildInstagramHashtags(prefs);
-    const instagramListings = await searchInstagramHashtags(hashtags, businessAccountId, accessToken);
+    const agentsRes = await pool.query(
+      `SELECT id, name, instagram_username FROM agents WHERE instagram_username IS NOT NULL`
+    );
+
+    const instagramListings = await searchAgentInstagramPosts(agentsRes.rows, prefs, businessAccountId, accessToken);
 
     console.log(`Found ${instagramListings.length} posts on Instagram`);
 
@@ -156,8 +162,8 @@ async function scrapeInstagram(userId: string, prefs: UserPreferences) {
         await pool.query(
           `INSERT INTO properties (
             address, city, source, source_url, verified, description, images,
-            created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)`,
+            agent_name, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)`,
           [
             prefs.city, // exact address unknown from a caption alone
             prefs.city,
@@ -166,6 +172,7 @@ async function scrapeInstagram(userId: string, prefs: UserPreferences) {
             false, // not verified
             post.description,
             post.images,
+            post.agent_name,
           ]
         );
 
@@ -185,66 +192,49 @@ async function scrapeInstagram(userId: string, prefs: UserPreferences) {
 }
 
 /**
- * Helper: Build Instagram hashtags for search
+ * Real Instagram Business Discovery lookup via the official Graph API.
+ * Docs: https://developers.facebook.com/docs/instagram-api/guides/business-discovery-api
+ * Requires our own Instagram Business Account to have Advanced Access
+ * for the instagram_basic permission (via Meta App Review) to look up
+ * agents' accounts we don't manage ourselves.
  */
-function buildInstagramHashtags(prefs: UserPreferences): string[] {
-  const citySlug = prefs.city.toLowerCase().replace(/\s+/g, '');
-
-  return [
-    `#bolig${citySlug}`,
-    `#husudsalg${citySlug}`,
-    `#ejendom${citySlug}`,
-    `#${citySlug}boliger`,
-    `#boligeudtojen`,
-    `#husethusvej`,
-    `#ejendomsmægler`,
-    `#boligmarked`,
-  ];
-}
-
-/**
- * Real Instagram Hashtag Search via the official Graph API.
- * Docs: https://developers.facebook.com/docs/instagram-api/guides/hashtag-search
- * Requires the business account to have been granted the
- * instagram_basic + instagram_manage_insights permissions.
- */
-async function searchInstagramHashtags(
-  hashtags: string[],
+async function searchAgentInstagramPosts(
+  agents: Array<{ id: string; name: string; instagram_username: string }>,
+  prefs: UserPreferences,
   businessAccountId: string,
   accessToken: string
-): Promise<Array<{ source_url: string; description: string; images: string[] }>> {
-  const results: Array<{ source_url: string; description: string; images: string[] }> = [];
+): Promise<Array<{ source_url: string; description: string; images: string[]; agent_name: string }>> {
+  const results: Array<{ source_url: string; description: string; images: string[]; agent_name: string }> = [];
   const graphUrl = 'https://graph.facebook.com/v19.0';
+  const cityLower = prefs.city.toLowerCase();
 
-  for (const tag of hashtags) {
+  for (const agent of agents) {
     try {
-      const tagName = tag.replace('#', '');
-
-      // Step 1: Resolve hashtag name to an ID
-      const hashtagRes = await axios.get(`${graphUrl}/ig_hashtag_search`, {
-        params: { user_id: businessAccountId, q: tagName, access_token: accessToken },
-      });
-      const hashtagId = hashtagRes.data?.data?.[0]?.id;
-      if (!hashtagId) continue;
-
-      // Step 2: Fetch recent media for that hashtag
-      const mediaRes = await axios.get(`${graphUrl}/${hashtagId}/recent_media`, {
+      const discoveryRes = await axios.get(`${graphUrl}/${businessAccountId}`, {
         params: {
-          user_id: businessAccountId,
-          fields: 'id,caption,permalink,media_url',
+          fields: `business_discovery.username(${agent.instagram_username}){media{caption,permalink,media_url,timestamp}}`,
           access_token: accessToken,
         },
       });
 
-      for (const post of mediaRes.data?.data ?? []) {
+      const media = discoveryRes.data?.business_discovery?.media?.data ?? [];
+
+      for (const post of media) {
+        const caption: string = post.caption ?? '';
+        if (!caption.toLowerCase().includes(cityLower)) continue; // only posts mentioning the requested city
+
         results.push({
           source_url: post.permalink,
-          description: post.caption ?? '',
+          description: caption,
           images: post.media_url ? [post.media_url] : [],
+          agent_name: agent.name,
         });
       }
     } catch (error: any) {
-      console.warn(`Instagram hashtag search failed for ${tag}:`, error.response?.data?.error?.message ?? error.message);
+      console.warn(
+        `Instagram business discovery failed for @${agent.instagram_username}:`,
+        error.response?.data?.error?.message ?? error.message
+      );
     }
   }
 

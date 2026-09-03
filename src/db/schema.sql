@@ -102,9 +102,12 @@ CREATE TABLE IF NOT EXISTS agents (
   company VARCHAR(255),
   verified BOOLEAN DEFAULT FALSE,
   password_hash VARCHAR(255),
+  instagram_username VARCHAR(100),  -- Public IG Business/Creator handle, for Business Discovery lookups
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS instagram_username VARCHAR(100);
 
 -- Agent Listings (pre-listing, early access)
 CREATE TABLE IF NOT EXISTS agent_listings (

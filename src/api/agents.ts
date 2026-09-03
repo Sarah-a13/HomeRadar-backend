@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-key-change-in-productio
 // POST agent registration
 router.post('/register', async (req: Request, res: Response) => {
   try {
-    const { name, email, phone, company, password } = req.body;
+    const { name, email, phone, company, password, instagram_username } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password required' });
@@ -19,9 +19,9 @@ router.post('/register', async (req: Request, res: Response) => {
     const password_hash = await bcrypt.hash(password, 10);
 
     const result = await pool.query(
-      `INSERT INTO agents (name, email, phone, company, password_hash)
-       VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, phone, company, verified, created_at`,
-      [name, email, phone || null, company || null, password_hash]
+      `INSERT INTO agents (name, email, phone, company, password_hash, instagram_username)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, phone, company, verified, instagram_username, created_at`,
+      [name, email, phone || null, company || null, password_hash, instagram_username || null]
     );
 
     const agent = result.rows[0];
@@ -72,12 +72,38 @@ router.post('/login', async (req: Request, res: Response) => {
         phone: agent.phone,
         company: agent.company,
         verified: agent.verified,
+        instagram_username: agent.instagram_username,
       },
       token,
     });
   } catch (error) {
     console.error('Error logging in:', error);
     res.status(500).json({ error: 'Failed to login' });
+  }
+});
+
+// PUT update agent's public Instagram username (used for Business Discovery lookups)
+router.put('/instagram', async (req: Request, res: Response) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+
+    if (!token) {
+      return res.status(401).json({ error: 'Token required' });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    const { instagram_username } = req.body;
+
+    const result = await pool.query(
+      `UPDATE agents SET instagram_username = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2
+       RETURNING id, name, email, instagram_username`,
+      [instagram_username || null, decoded.id]
+    );
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating agent Instagram username:', error);
+    res.status(500).json({ error: 'Failed to update Instagram username' });
   }
 });
 
