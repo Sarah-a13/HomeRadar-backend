@@ -7,6 +7,7 @@ import { Pool } from 'pg';
 import propertiesRouter from './api/properties';
 import usersRouter from './api/users';
 import agentsRouter from './api/agents';
+import { requestLogger } from './middleware/requestLogger';
 
 dotenv.config();
 
@@ -27,6 +28,7 @@ app.use(cors({
   },
 }));
 app.use(express.json({ limit: '1mb' }));
+app.use(requestLogger);
 
 // Database connection pool
 export const pool = new Pool({

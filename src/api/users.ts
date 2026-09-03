@@ -284,12 +284,17 @@ router.post('/reset-password', authRateLimiter, async (req: Request, res: Respon
 
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
     const result = await pool.query(
-      'SELECT id FROM users WHERE password_reset_token = $1 AND password_reset_expires > NOW()',
+      'SELECT id, password_hash FROM users WHERE password_reset_token = $1 AND password_reset_expires > NOW()',
       [tokenHash]
     );
 
     if (result.rows.length === 0) {
       return res.status(400).json({ error: 'Invalid or expired reset link' });
+    }
+
+    const sameAsOld = result.rows[0].password_hash && await bcrypt.compare(newPassword, result.rows[0].password_hash);
+    if (sameAsOld) {
+      return res.status(400).json({ error: 'New password must be different from your current password' });
     }
 
     const password_hash = await bcrypt.hash(newPassword, 10);
@@ -332,6 +337,9 @@ router.put('/profile', async (req: Request, res: Response) => {
       }
       if (new_password.length < 8) {
         return res.status(400).json({ error: 'New password must be at least 8 characters' });
+      }
+      if (await bcrypt.compare(new_password, user.password_hash)) {
+        return res.status(400).json({ error: 'New password must be different from your current password' });
       }
       password_hash = await bcrypt.hash(new_password, 10);
     }

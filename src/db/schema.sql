@@ -72,6 +72,12 @@ CREATE INDEX IF NOT EXISTS idx_bedrooms ON properties (bedrooms);
 CREATE INDEX IF NOT EXISTS idx_source ON properties (source);
 CREATE INDEX IF NOT EXISTS idx_geo ON properties (latitude, longitude);
 CREATE INDEX IF NOT EXISTS idx_created ON properties (created_at);
+-- Composite index for the common "filter by city + budget + bedrooms" query pattern
+CREATE INDEX IF NOT EXISTS idx_city_price_bedrooms ON properties (city, price, bedrooms);
+
+-- Prevents the same source listing (e.g. a Boligsiden or agent-portal ID) from being inserted twice.
+-- Multiple NULL source_ids are still allowed (Postgres treats NULLs as distinct in unique constraints).
+ALTER TABLE properties ADD CONSTRAINT uq_properties_source_source_id UNIQUE (source, source_id);
 
 -- Create GIS index for geographic queries (if PostGIS available)
 -- CREATE INDEX idx_geo_point ON properties USING GIST (
