@@ -1,5 +1,6 @@
 import { pool } from '../server';
 import axios from 'axios';
+import { scrapeBoligsidenForCriteria } from './boligsiden';
 
 /**
  * Trigger-Based Property Matching
@@ -26,6 +27,7 @@ const ENABLE_INSTAGRAM_SCRAPING = false; // paused — flip back on once Instagr
 
 export interface UserPreferences {
   city: string;
+  cities?: string[];
   budget?: { min: number; max: number };
   bedrooms?: number;
   features?: string[];
@@ -41,7 +43,10 @@ export async function triggerSocialMediaScraping(userId: string, preferences: Us
     console.log(`   Budget: ${preferences.budget?.min}-${preferences.budget?.max}`);
 
     // Run asynchronously (don't block user experience)
-    const tasks = [matchAgentComingSoonListings(userId, preferences)];
+    const tasks = [
+      matchAgentComingSoonListings(userId, preferences),
+      searchBoligsidenForUnmetCriteria(userId, preferences),
+    ];
     if (ENABLE_INSTAGRAM_SCRAPING) {
       tasks.push(scrapeInstagram(userId, preferences));
     } else {
@@ -131,6 +136,49 @@ async function matchAgentComingSoonListings(userId: string, prefs: UserPreferenc
     }
   } catch (error) {
     console.error('Agent listing matcher error:', error);
+  }
+}
+
+/**
+ * Live, Targeted Boligsiden Search
+ * If the property pool we already have doesn't contain anything matching this user's
+ * saved areas + budget, go fetch fresh price-filtered listings from Boligsiden right now
+ * and keep only the ones in their requested area(s), instead of waiting for the next
+ * scheduled full-catalog scrape.
+ */
+async function searchBoligsidenForUnmetCriteria(userId: string, prefs: UserPreferences) {
+  try {
+    const areas = (prefs.cities && prefs.cities.length > 0) ? prefs.cities : [prefs.city];
+    const budgetMin = prefs.budget?.min ?? 0;
+    const budgetMax = prefs.budget?.max ?? 999000000;
+
+    // Same city-name/postal-code + alias matching used on the frontend, so this existence
+    // check doesn't falsely conclude "no matches" just because "Copenhagen" != "København".
+    const CITY_ALIASES: Record<string, string> = { copenhagen: 'københavn' };
+    const searchTerms = areas.flatMap(a => {
+      const alias = CITY_ALIASES[a.toLowerCase()];
+      return alias ? [a, alias] : [a];
+    });
+
+    const areaConditions = searchTerms.map((_, i) => `city ILIKE $${i + 3} OR postal_code LIKE $${i + 3}`).join(' OR ');
+    const existing = await pool.query(
+      `SELECT id FROM properties WHERE price BETWEEN $1 AND $2 AND (${areaConditions}) LIMIT 1`,
+      [budgetMin, budgetMax, ...searchTerms.map(a => `${a}%`)]
+    );
+
+    if (existing.rows.length > 0) {
+      console.log(`🏠 Already have matching properties for [${areas.join(', ')}] - skipping live search`);
+      return;
+    }
+
+    console.log(`🔍 No existing matches for [${areas.join(', ')}] - searching Boligsiden live...`);
+    const { inserted } = await scrapeBoligsidenForCriteria(areas, budgetMin, budgetMax);
+
+    if (inserted > 0) {
+      await notifyUser(userId, `Found ${inserted} new properties matching your criteria in ${areas.join(', ')}`);
+    }
+  } catch (error) {
+    console.error('Targeted Boligsiden search error:', error);
   }
 }
 

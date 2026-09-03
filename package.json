@@ -4,9 +4,9 @@
   "description": "HomeRadar real estate intelligence backend",
   "main": "dist/server.js",
   "scripts": {
-    "dev": "ts-node src/server.ts",
+    "dev": "node --use-system-ca -r ts-node/register src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js",
+    "start": "node --use-system-ca dist/server.js",
     "setup": "ts-node src/setup.ts",
     "db:setup": "psql -f src/db/schema.sql",
     "scrape:boiq": "ts-node src/scrapers/boiq.ts",

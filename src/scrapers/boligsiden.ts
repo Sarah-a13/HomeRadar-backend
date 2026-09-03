@@ -121,8 +121,13 @@ function parseListingsFromHtml(html: string): ScrapedListing[] {
   return listings.filter(l => (seen.has(l.caseId) ? false : (seen.add(l.caseId), true)));
 }
 
-async function fetchPage(page: number): Promise<string> {
-  const url = page <= 1 ? BASE_URL : `${BASE_URL}?page=${page}`;
+async function fetchPage(page: number, priceMin?: number, priceMax?: number): Promise<string> {
+  const params = new URLSearchParams();
+  if (page > 1) params.set('page', String(page));
+  if (priceMin) params.set('priceMin', String(Math.floor(priceMin)));
+  if (priceMax && priceMax < 900000000) params.set('priceMax', String(Math.floor(priceMax)));
+  const qs = params.toString();
+  const url = qs ? `${BASE_URL}?${qs}` : BASE_URL;
   const response = await axios.get(url, {
     headers: { 'User-Agent': USER_AGENT, 'Accept-Language': 'da-DK,da;q=0.9' },
     timeout: 20000,
@@ -132,6 +137,52 @@ async function fetchPage(page: number): Promise<string> {
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Inserts one listing if it isn't already stored (dedup by source_id). Returns true if inserted.
+async function insertListing(listing: ScrapedListing): Promise<boolean> {
+  const existing = await pool.query(
+    'SELECT id FROM properties WHERE source_id = $1 AND source = $2',
+    [listing.caseId, 'boligsiden']
+  );
+  if (existing.rows.length > 0) {
+    return false;
+  }
+
+  const address = `${listing.roadName} ${listing.houseNumber}${listing.floor ? ', ' + listing.floor + '.' : ''}, ${listing.zipCode} ${listing.cityName}`;
+  const listingDate = listing.daysListed !== undefined
+    ? new Date(Date.now() - listing.daysListed * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+    : null;
+
+  await pool.query(
+    `INSERT INTO properties (
+      address, postal_code, city, latitude, longitude, price,
+      bedrooms, sqm, year_built, property_type,
+      source, source_url, source_id, verified, images, thumbnail_url,
+      agent_name, listing_date, created_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, CURRENT_TIMESTAMP)`,
+    [
+      address,
+      listing.zipCode,
+      listing.cityName,
+      listing.lat ?? null,
+      listing.lon ?? null,
+      listing.priceCash,
+      listing.numberOfRooms ?? null,
+      listing.housingArea ?? null,
+      listing.yearBuilt ?? null,
+      PROPERTY_TYPE_MAP[listing.addressType] || listing.addressType,
+      'boligsiden',
+      `https://www.boligsiden.dk/adresse/${listing.slugAddress}`,
+      listing.caseId,
+      true, // verified - Boligsiden aggregates licensed real estate agents' own listings
+      listing.imageUrl ? [listing.imageUrl] : null,
+      listing.imageUrl ?? null,
+      listing.realtorName ?? null,
+      listingDate,
+    ]
+  );
+  return true;
 }
 
 async function scrapeBoligsiden(maxPages: number, delayMs: number) {
@@ -160,51 +211,12 @@ async function scrapeBoligsiden(maxPages: number, delayMs: number) {
 
     for (const listing of listings) {
       try {
-        const existing = await pool.query(
-          'SELECT id FROM properties WHERE source_id = $1 AND source = $2',
-          [listing.caseId, 'boligsiden']
-        );
-
-        if (existing.rows.length > 0) {
+        const wasInserted = await insertListing(listing);
+        if (wasInserted) {
+          insertedCount++;
+        } else {
           skippedCount++;
-          continue;
         }
-
-        const address = `${listing.roadName} ${listing.houseNumber}${listing.floor ? ', ' + listing.floor + '.' : ''}, ${listing.zipCode} ${listing.cityName}`;
-        const listingDate = listing.daysListed !== undefined
-          ? new Date(Date.now() - listing.daysListed * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-          : null;
-
-        await pool.query(
-          `INSERT INTO properties (
-            address, postal_code, city, latitude, longitude, price,
-            bedrooms, sqm, year_built, property_type,
-            source, source_url, source_id, verified, images, thumbnail_url,
-            agent_name, listing_date, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, CURRENT_TIMESTAMP)`,
-          [
-            address,
-            listing.zipCode,
-            listing.cityName,
-            listing.lat ?? null,
-            listing.lon ?? null,
-            listing.priceCash,
-            listing.numberOfRooms ?? null,
-            listing.housingArea ?? null,
-            listing.yearBuilt ?? null,
-            PROPERTY_TYPE_MAP[listing.addressType] || listing.addressType,
-            'boligsiden',
-            `https://www.boligsiden.dk/adresse/${listing.slugAddress}`,
-            listing.caseId,
-            true, // verified - Boligsiden aggregates licensed real estate agents' own listings
-            listing.imageUrl ? [listing.imageUrl] : null,
-            listing.imageUrl ?? null,
-            listing.realtorName ?? null,
-            listingDate,
-          ]
-        );
-
-        insertedCount++;
       } catch (error) {
         console.error(`Failed to store listing ${listing.caseId}:`, error);
       }
@@ -226,9 +238,73 @@ async function scrapeBoligsiden(maxPages: number, delayMs: number) {
 const maxPages = parseInt(process.argv[2] || process.env.BOLIGSIDEN_MAX_PAGES || '5', 10);
 const delayMs = parseInt(process.argv[3] || process.env.BOLIGSIDEN_DELAY_MS || '1500', 10);
 
-scrapeBoligsiden(maxPages, delayMs)
-  .then(() => process.exit(0))
-  .catch(error => {
-    console.error('Fatal error scraping Boligsiden:', error);
-    process.exit(1);
-  });
+// Danish real-estate data uses native city names with postal-district suffixes (e.g. "København K"),
+// and users may type a city name or a postal code - mirrors the matching helper used on the frontend.
+const CITY_ALIASES: Record<string, string> = { Copenhagen: 'København' };
+function matchesArea(area: string, cityName: string, zipCode: string): boolean {
+  const trimmed = (area || '').trim();
+  if (!trimmed) return false;
+  if (/^\d+$/.test(trimmed)) {
+    return zipCode.startsWith(trimmed);
+  }
+  const cityLower = cityName.toLowerCase();
+  const areaLower = trimmed.toLowerCase();
+  if (cityLower.startsWith(areaLower)) return true;
+  const alias = CITY_ALIASES[trimmed];
+  return alias ? cityLower.startsWith(alias.toLowerCase()) : false;
+}
+
+/**
+ * On-demand targeted search, triggered when a user's saved criteria has no existing matches
+ * in the database. Fetches a small, bounded number of price-filtered pages (not a full crawl)
+ * and keeps only listings in the user's requested area(s), inserting new ones.
+ */
+export async function scrapeBoligsidenForCriteria(
+  areas: string[],
+  budgetMin: number,
+  budgetMax: number,
+  maxPagesToCheck = 8
+): Promise<{ inserted: number; matched: number }> {
+  let inserted = 0;
+  let matched = 0;
+
+  for (let page = 1; page <= maxPagesToCheck; page++) {
+    let html: string;
+    try {
+      html = await fetchPage(page, budgetMin, budgetMax);
+    } catch (error: any) {
+      console.error(`[targeted search] Failed to fetch page ${page}:`, error.message);
+      break;
+    }
+
+    const listings = parseListingsFromHtml(html);
+    if (listings.length === 0) break;
+
+    const areaMatches = listings.filter(l => areas.some(a => matchesArea(a, l.cityName, l.zipCode)));
+    matched += areaMatches.length;
+
+    for (const listing of areaMatches) {
+      try {
+        if (await insertListing(listing)) inserted++;
+      } catch (error) {
+        console.error(`[targeted search] Failed to store listing ${listing.caseId}:`, error);
+      }
+    }
+
+    if (page < maxPagesToCheck) await sleep(800);
+  }
+
+  console.log(`🔍 Targeted Boligsiden search for [${areas.join(', ')}]: matched ${matched}, inserted ${inserted} new`);
+  return { inserted, matched };
+}
+
+// Only run the full multi-page crawl when this file is executed directly (npm run scrape:boligsiden),
+// not when imported by trigger.ts for the on-demand targeted search above.
+if (require.main === module) {
+  scrapeBoligsiden(maxPages, delayMs)
+    .then(() => process.exit(0))
+    .catch(error => {
+      console.error('Fatal error scraping Boligsiden:', error);
+      process.exit(1);
+    });
+}
