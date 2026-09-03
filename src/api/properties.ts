@@ -1,7 +1,18 @@
 import express, { Request, Response } from 'express';
 import { pool } from '../server';
+import { getAuthUser } from '../middleware/auth';
 
 const router = express.Router();
+
+// Columns callers are allowed to set via POST/PUT — prevents arbitrary column
+// injection through unvalidated request body keys.
+const WRITABLE_PROPERTY_FIELDS = new Set([
+  'address', 'postal_code', 'city', 'country', 'latitude', 'longitude',
+  'price', 'bedrooms', 'bathrooms', 'sqm', 'year_built', 'property_type',
+  'source', 'source_url', 'source_id', 'verified', 'images', 'thumbnail_url',
+  'description', 'agent_name', 'agent_phone', 'agent_email',
+  'listing_date', 'sold_date',
+]);
 
 // Mock properties for fallback when database unavailable
 const mockProperties = [
@@ -216,8 +227,11 @@ router.get('/:id', async (req: Request, res: Response) => {
   }
 });
 
-// POST new property (internal use / admin)
+// POST new property (internal use / admin) — requires auth
 router.post('/', async (req: Request, res: Response) => {
+  if (!getAuthUser(req)) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
   try {
     const {
       address,
@@ -281,20 +295,28 @@ router.post('/', async (req: Request, res: Response) => {
   }
 });
 
-// PUT update property
+// PUT update property — requires auth; only whitelisted columns can be set
 router.put('/:id', async (req: Request, res: Response) => {
+  if (!getAuthUser(req)) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
   try {
     const { id } = req.params;
     const updates = req.body;
 
-    // Build dynamic update query
-    const setClause = Object.keys(updates)
+    const validKeys = Object.keys(updates).filter(key => WRITABLE_PROPERTY_FIELDS.has(key));
+    if (validKeys.length === 0) {
+      return res.status(400).json({ error: 'No valid fields to update' });
+    }
+
+    // Build dynamic update query from a whitelisted, parameterized set of columns only
+    const setClause = validKeys
       .map((key, idx) => `${key} = $${idx + 2}`)
       .join(', ');
 
     const result = await pool.query(
       `UPDATE properties SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING *`,
-      [id, ...Object.values(updates)]
+      [id, ...validKeys.map(key => updates[key])]
     );
 
     if (result.rows.length === 0) {

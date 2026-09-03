@@ -14,8 +14,19 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 // Middleware
-app.use(cors());
-app.use(express.json());
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'https://sarah-a13.github.io,http://localhost:3000,http://localhost:5500,http://127.0.0.1:5500')
+  .split(',')
+  .map(o => o.trim());
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow no-origin requests (e.g. curl, server-to-server) and file:// (origin 'null') for local prototype testing
+    if (!origin || origin === 'null' || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    callback(new Error('Not allowed by CORS'));
+  },
+}));
+app.use(express.json({ limit: '1mb' }));
 
 // Database connection pool
 export const pool = new Pool({
