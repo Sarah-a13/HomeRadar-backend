@@ -1,5 +1,5 @@
--- Create database
-CREATE DATABASE IF NOT EXISTS homeradar;
+-- Ensure UUID generation is available
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- Users table (HomeRadar buyers/users)
 CREATE TABLE IF NOT EXISTS users (
@@ -55,18 +55,18 @@ CREATE TABLE IF NOT EXISTS properties (
   listing_date DATE,
   sold_date DATE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  
-  -- Indexes for performance
-  INDEX idx_address (address),
-  INDEX idx_city (city),
-  INDEX idx_postal_code (postal_code),
-  INDEX idx_price (price),
-  INDEX idx_bedrooms (bedrooms),
-  INDEX idx_source (source),
-  INDEX idx_geo (latitude, longitude),
-  INDEX idx_created (created_at)
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_address ON properties (address);
+CREATE INDEX IF NOT EXISTS idx_city ON properties (city);
+CREATE INDEX IF NOT EXISTS idx_postal_code ON properties (postal_code);
+CREATE INDEX IF NOT EXISTS idx_price ON properties (price);
+CREATE INDEX IF NOT EXISTS idx_bedrooms ON properties (bedrooms);
+CREATE INDEX IF NOT EXISTS idx_source ON properties (source);
+CREATE INDEX IF NOT EXISTS idx_geo ON properties (latitude, longitude);
+CREATE INDEX IF NOT EXISTS idx_created ON properties (created_at);
 
 -- Create GIS index for geographic queries (if PostGIS available)
 -- CREATE INDEX idx_geo_point ON properties USING GIST (
