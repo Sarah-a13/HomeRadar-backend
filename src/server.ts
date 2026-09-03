@@ -14,6 +14,12 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3001;
 
+// Trust Render's reverse proxy so req.ip / X-Forwarded-For are read correctly.
+// Without this, express-rate-limit (and any IP-based logic) would treat every
+// request as coming from the proxy's IP, effectively sharing one rate-limit
+// bucket across all users.
+app.set('trust proxy', 1);
+
 // Middleware
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'https://sarah-a13.github.io,http://localhost:3000,http://localhost:5500,http://127.0.0.1:5500')
   .split(',')
