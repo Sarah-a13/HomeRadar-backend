@@ -111,6 +111,22 @@ CREATE TABLE IF NOT EXISTS property_updates (
   timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Per-listing relevance feedback (👍/👎) with the user's free-text reason and the
+-- scoring dimensions detected from it. IDs are TEXT (not FKs) because feedback can be
+-- given on mock listings too; property_snapshot captures the listing's attributes at
+-- feedback time so reasons can be correlated with what the property actually was.
+CREATE TABLE IF NOT EXISTS property_feedback (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  property_id TEXT,
+  relevant BOOLEAN NOT NULL,
+  reason TEXT,
+  signals TEXT[],
+  property_snapshot JSONB,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_user ON property_feedback (user_id, created_at);
+
 -- Agent Portal (real estate agents)
 CREATE TABLE IF NOT EXISTS agents (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

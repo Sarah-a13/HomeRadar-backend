@@ -230,6 +230,40 @@ router.put('/preferences', async (req: Request, res: Response) => {
   }
 });
 
+// POST record per-listing relevance feedback (👍/👎) with the user's reason and the
+// scoring signals detected from it. Kept separate from PUT /preferences so submitting
+// feedback does not trigger a scraper run, and so reasons land in a queryable table.
+router.post('/feedback', async (req: Request, res: Response) => {
+  const decoded = getAuthUser(req);
+  if (!decoded) {
+    return res.status(401).json({ error: 'Token required' });
+  }
+
+  const { propertyId, relevant, reason, signals, propertySnapshot } = req.body;
+  if (typeof relevant !== 'boolean') {
+    return res.status(400).json({ error: 'relevant (boolean) is required' });
+  }
+
+  try {
+    await pool.query(
+      `INSERT INTO property_feedback (user_id, property_id, relevant, reason, signals, property_snapshot)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        String(decoded.id),
+        propertyId != null ? String(propertyId) : null,
+        relevant,
+        (typeof reason === 'string' && reason.trim()) ? reason.trim() : null,
+        Array.isArray(signals) ? signals.map(String) : null,
+        propertySnapshot ? JSON.stringify(propertySnapshot) : null,
+      ]
+    );
+    res.status(201).json({ message: 'Feedback recorded' });
+  } catch (error: any) {
+    console.error('Error recording feedback:', error.message);
+    res.status(500).json({ error: 'Failed to record feedback' });
+  }
+});
+
 // POST forgot password - issues a reset token
 // NOTE: no email service is configured for this project, so the reset link is returned directly
 // in the response for the frontend to display (clearly marked as demo-only). In production this

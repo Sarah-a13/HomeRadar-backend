@@ -62,6 +62,23 @@ pool.query('SELECT NOW()', (err, res) => {
   }
 });
 
+// Ensure the feedback table exists (idempotent) so learning data can be recorded
+// without a separate manual migration on the hosted database.
+pool.query(`
+  CREATE TABLE IF NOT EXISTS property_feedback (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id TEXT NOT NULL,
+    property_id TEXT,
+    relevant BOOLEAN NOT NULL,
+    reason TEXT,
+    signals TEXT[],
+    property_snapshot JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+`).then(() => pool.query(
+  'CREATE INDEX IF NOT EXISTS idx_feedback_user ON property_feedback (user_id, created_at);'
+)).catch(err => console.error('⚠️  Could not ensure property_feedback table:', err.message));
+
 pool.on('error', (err) => {
   console.error('⚠️ Unexpected error on idle client:', err.message);
   // Don't exit - allow graceful degradation
