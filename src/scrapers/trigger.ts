@@ -45,7 +45,7 @@ export async function triggerSocialMediaScraping(userId: string, preferences: Us
     // Run asynchronously (don't block user experience)
     const tasks = [
       matchAgentComingSoonListings(userId, preferences),
-      searchBoligsidenForUnmetCriteria(userId, preferences),
+      searchBoligsidenForUnmetCriteria(userId, preferences, true),
     ];
     if (ENABLE_INSTAGRAM_SCRAPING) {
       tasks.push(scrapeInstagram(userId, preferences));
@@ -59,6 +59,27 @@ export async function triggerSocialMediaScraping(userId: string, preferences: Us
     console.log('✅ Matching queued (running in background)');
   } catch (error) {
     console.error('Error triggering matcher:', error);
+  }
+}
+
+let scheduledSearchRunning = false;
+
+export async function runScheduledMatching() {
+  if (scheduledSearchRunning) return;
+  scheduledSearchRunning = true;
+  try {
+    const result = await pool.query('SELECT id, preferences FROM users WHERE preferences IS NOT NULL');
+    await Promise.all(result.rows.map(async user => {
+      const preferences = user.preferences || {};
+      const areas = Array.isArray(preferences.cities) ? preferences.cities.filter(Boolean) : [];
+      const city = preferences.city || areas[0];
+      if (!city && areas.length === 0) return;
+      await searchBoligsidenForUnmetCriteria(user.id, { ...preferences, city: city || areas[0], cities: areas }, true);
+    }));
+  } catch (error) {
+    console.error('Scheduled matching sweep failed:', error);
+  } finally {
+    scheduledSearchRunning = false;
   }
 }
 
@@ -146,7 +167,7 @@ async function matchAgentComingSoonListings(userId: string, prefs: UserPreferenc
  * and keep only the ones in their requested area(s), instead of waiting for the next
  * scheduled full-catalog scrape.
  */
-async function searchBoligsidenForUnmetCriteria(userId: string, prefs: UserPreferences) {
+async function searchBoligsidenForUnmetCriteria(userId: string, prefs: UserPreferences, forceSearch = false) {
   try {
     const areas = (prefs.cities && prefs.cities.length > 0) ? prefs.cities : [prefs.city];
     const budgetMin = prefs.budget?.min ?? 0;
@@ -166,7 +187,7 @@ async function searchBoligsidenForUnmetCriteria(userId: string, prefs: UserPrefe
       [budgetMin, budgetMax, ...searchTerms.map(a => `${a}%`)]
     );
 
-    if (existing.rows.length > 0) {
+    if (existing.rows.length > 0 && !forceSearch) {
       console.log(`🏠 Already have matching properties for [${areas.join(', ')}] - skipping live search`);
       return;
     }

@@ -28,7 +28,7 @@ const USER_AGENT = 'HomeRadarBot/1.0 (+https://sarah-a13.github.io/HomeRadar_1/;
 // Every listing object in the page payload starts with this exact key sequence.
 const ADDRESS_BLOCK_MARKER = '"address":{"_links":{"self":{"href":"/addresses/';
 
-const PROPERTY_TYPE_MAP: Record<string, string> = {
+export const PROPERTY_TYPE_MAP: Record<string, string> = {
   villa: 'house',
   condo: 'apartment',
   terracedHouse: 'townhouse',
@@ -56,15 +56,15 @@ interface ScrapedListing {
   daysListed?: number;
 }
 
-function extractField(text: string, regex: RegExp): string | undefined {
+export function extractField(text: string, regex: RegExp): string | undefined {
   return text.match(regex)?.[1];
 }
 
-function decodeEscapes(str: string): string {
+export function decodeEscapes(str: string): string {
   return str.replace(/\\u0026/g, '&').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
 }
 
-function parseListingsFromHtml(html: string): ScrapedListing[] {
+export function parseListingsFromHtml(html: string): ScrapedListing[] {
   const decoded = decodeEscapes(html);
   const blocks = decoded.split(ADDRESS_BLOCK_MARKER).slice(1); // part 0 is page chrome before the first listing
 
@@ -142,27 +142,22 @@ function sleep(ms: number) {
 }
 
 // Inserts one listing if it isn't already stored (dedup by source_id). Returns true if inserted.
+// Uses ON CONFLICT DO NOTHING (atomic at the DB level) rather than a separate SELECT-then-INSERT,
+// since concurrent scheduled searches for different users can target the same listing at once.
 async function insertListing(listing: ScrapedListing): Promise<boolean> {
-  const existing = await pool.query(
-    'SELECT id FROM properties WHERE source_id = $1 AND source = $2',
-    [listing.caseId, 'boligsiden']
-  );
-  if (existing.rows.length > 0) {
-    return false;
-  }
-
   const address = `${listing.roadName} ${listing.houseNumber}${listing.floor ? ', ' + listing.floor + '.' : ''}, ${listing.zipCode} ${listing.cityName}`;
   const listingDate = listing.daysListed !== undefined
     ? new Date(Date.now() - listing.daysListed * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
     : null;
 
-  await pool.query(
+  const result = await pool.query(
     `INSERT INTO properties (
       address, postal_code, city, latitude, longitude, price,
       bedrooms, sqm, year_built, property_type,
       source, source_url, source_id, verified, images, thumbnail_url,
       agent_name, listing_date, created_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, CURRENT_TIMESTAMP)`,
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, CURRENT_TIMESTAMP)
+    ON CONFLICT (source, source_id) DO NOTHING`,
     [
       address,
       listing.zipCode,
@@ -184,7 +179,7 @@ async function insertListing(listing: ScrapedListing): Promise<boolean> {
       listingDate,
     ]
   );
-  return true;
+  return (result.rowCount ?? 0) > 0;
 }
 
 async function scrapeBoligsiden(maxPages: number, delayMs: number) {
@@ -242,8 +237,8 @@ const delayMs = parseInt(process.argv[3] || process.env.BOLIGSIDEN_DELAY_MS || '
 
 // Danish real-estate data uses native city names with postal-district suffixes (e.g. "København K"),
 // and users may type a city name or a postal code - mirrors the matching helper used on the frontend.
-const CITY_ALIASES: Record<string, string> = { Copenhagen: 'København' };
-function matchesArea(area: string, cityName: string, zipCode: string): boolean {
+export const CITY_ALIASES: Record<string, string> = { Copenhagen: 'København' };
+export function matchesArea(area: string, cityName: string, zipCode: string): boolean {
   const trimmed = (area || '').trim();
   if (!trimmed) return false;
   if (/^\d+$/.test(trimmed)) {

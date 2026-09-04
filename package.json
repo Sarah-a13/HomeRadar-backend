@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node --use-system-ca -r ts-node/register src/server.ts",
     "build": "tsc",
+    "test": "jest",
     "start": "node --use-system-ca dist/server.js",
     "setup": "ts-node src/setup.ts",
     "db:setup": "psql -f src/db/schema.sql",
@@ -33,6 +34,9 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20.9.0",
     "@types/pg": "^8.10.7",
+    "@types/jest": "^29.5.12",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
     "ts-node": "^10.9.1",
     "typescript": "^5.2.2"
   }

@@ -47,20 +47,20 @@ const RISK_LABELS: Record<string, string> = {
   'meget høj': 'Very High',
 };
 
-function translateRisk(da: string | undefined): string | undefined {
+export function translateRisk(da: string | undefined): string | undefined {
   if (!da) return undefined;
   const key = da.trim().toLowerCase();
   return RISK_LABELS[key] ?? (key.charAt(0).toUpperCase() + key.slice(1));
 }
 
-function slugify(value: string): string {
+export function slugify(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, '-');
 }
 
 // Addresses are stored as "{street} {number}, {postal} {city}" — DinGeo's URL
 // scheme needs the street+number and postal+city as two separate path segments
 // (e.g. /adresse/5250-odense-sv/morelvej-84/), not the combined display string.
-function buildDinGeoUrl(address: string, postalCode: string | null, city: string | null): string | null {
+export function buildDinGeoUrl(address: string, postalCode: string | null, city: string | null): string | null {
   if (!postalCode || !city) return null;
   const streetAndNumber = address.split(',')[0]?.trim();
   if (!streetAndNumber) return null;

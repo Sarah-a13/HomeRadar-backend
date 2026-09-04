@@ -171,11 +171,14 @@ router.put('/preferences', async (req: Request, res: Response) => {
 
     // 🔥 TRIGGER: Start social media scraping in background
     // User submitted preferences → search Facebook/Instagram for matches
-    if (preferences.city) {
+    const preferenceAreas = Array.isArray(preferences.cities) ? preferences.cities.filter(Boolean) : [];
+    const preferenceCity = preferences.city || preferenceAreas[0];
+    if (preferenceCity || preferenceAreas.length > 0) {
       console.log(`🔥 Preferences saved for user ${decoded.id} - Triggering scraper`);
       
       triggerSocialMediaScraping(decoded.id, {
-        city: preferences.city,
+        city: preferenceCity || preferenceAreas[0],
+        cities: preferenceAreas,
         budget: preferences.budget,
         bedrooms: preferences.bedrooms,
         features: preferences.features,

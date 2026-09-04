@@ -8,6 +8,7 @@ import propertiesRouter from './api/properties';
 import usersRouter from './api/users';
 import agentsRouter from './api/agents';
 import { requestLogger } from './middleware/requestLogger';
+import { runScheduledMatching } from './scrapers/trigger';
 
 dotenv.config();
 
@@ -80,4 +81,13 @@ app.get('/health', (req: Request, res: Response) => {
 app.listen(port, () => {
   console.log(`🚀 HomeRadar backend running on port ${port}`);
   console.log(`📊 Database: ${process.env.DB_HOST || 'localhost'}:${process.env.DB_PORT || 5432}/${process.env.DB_NAME || 'homeradar'}`);
+  // Off by default; opt in with ENABLE_SCHEDULED_SWEEP=true. Continuously scrapes
+  // Boligsiden for every user's criteria, so keep the interval conservative in production.
+  if (process.env.ENABLE_SCHEDULED_SWEEP === 'true') {
+    const sweepIntervalMs = parseInt(process.env.SCHEDULED_SWEEP_INTERVAL_MS || '600000', 10);
+    setInterval(() => { void runScheduledMatching(); }, sweepIntervalMs);
+    console.log(`⏱️  Scheduled matching sweep enabled every ${Math.round(sweepIntervalMs / 1000)}s`);
+  } else {
+    console.log('⏱️  Scheduled matching sweep disabled (set ENABLE_SCHEDULED_SWEEP=true to enable)');
+  }
 });
