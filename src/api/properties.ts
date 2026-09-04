@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import { pool } from '../server';
 import { getAuthUser } from '../middleware/auth';
 import { enrichPropertyDetails } from '../scrapers/boligsiden';
+import { getDinGeoInsights } from '../scrapers/dingeo';
 
 const router = express.Router();
 
@@ -238,6 +239,29 @@ router.get('/:id', async (req: Request, res: Response) => {
     }
     
     res.status(404).json({ error: 'Property not found' });
+  }
+});
+
+// GET DinGeo geodata insights (radon/burglary/flood risk, traffic noise, school
+// district, automated valuation) for a property's address — a free public report
+// from dingeo.dk, surfaced inline so buyers don't have to look it up themselves.
+router.get('/:id/dingeo', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query('SELECT address, postal_code, city FROM properties WHERE id = $1', [id]);
+
+    if (result.rows.length === 0) {
+      const mockProp = mockProperties.find(p => p.id === parseInt(id));
+      if (!mockProp) return res.status(404).json({ error: 'Property not found' });
+      return res.json({ available: false });
+    }
+
+    const { address, postal_code, city } = result.rows[0];
+    const insights = await getDinGeoInsights(address, postal_code, city);
+    res.json(insights);
+  } catch (error: any) {
+    console.error(`Failed to fetch DinGeo insights for property ${req.params.id}:`, error.message);
+    res.json({ available: false });
   }
 });
 
